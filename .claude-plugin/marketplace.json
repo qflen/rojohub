@@ -1,0 +1,12 @@
+{
+  "name": "rojohub",
+  "owner": { "name": "RojoHub contributors" },
+  "description": "RojoHub: run many Rojo projects and Roblox Studio windows side by side.",
+  "plugins": [
+    {
+      "name": "rojohub",
+      "source": ".",
+      "description": "Run many Rojo projects and Roblox Studio windows side by side, with Studio auto-connect and Studio tools fenced to the project you are in."
+    }
+  ]
+}

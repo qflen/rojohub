@@ -1,0 +1,92 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  build:
+    name: build (${{ matrix.asset }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, target: aarch64-apple-darwin, asset: rojohub-macos-arm64 }
+          - { os: macos-latest, target: x86_64-apple-darwin, asset: rojohub-macos-x64 }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, asset: rojohub-linux-x64 }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, asset: rojohub-linux-arm64 }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, asset: rojohub-windows-x64.exe }
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag must match Cargo.toml
+        shell: bash
+        run: |
+          v="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} but Cargo.toml says $v"; exit 1; }
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: ${{ matrix.target }}
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --target ${{ matrix.target }}
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          CC_aarch64_unknown_linux_musl: musl-gcc
+      - name: Collect
+        shell: bash
+        run: |
+          mkdir -p dist
+          src="target/${{ matrix.target }}/release/rojohub"; [ "$RUNNER_OS" = Windows ] && src="$src.exe"
+          cp "$src" "dist/${{ matrix.asset }}"
+          "dist/${{ matrix.asset }}" version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+
+  app:
+    name: macOS app (universal)
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rojohub-macos-*
+          path: dl
+          merge-multiple: true
+      - run: chmod +x dl/rojohub-macos-arm64 dl/rojohub-macos-x64 && scripts/build-app.sh --bin dl/rojohub-macos-arm64 --bin dl/rojohub-macos-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RojoHub-mac.zip
+          path: dist/RojoHub-mac.zip
+
+  publish:
+    needs: [build, app]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+          merge-multiple: true
+      - name: Checksums and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist && cp dl/* dist/ && cp scripts/install.sh scripts/install.ps1 dist/
+          (cd dist && sha256sum rojohub-* RojoHub-mac.zip > SHA256SUMS && cat SHA256SUMS)
+          cat > notes.md <<EOF
+          One local hub for many Rojo projects and Roblox Studio windows. One binary, nothing else to install.
+
+          **Install (macOS, Linux)**: \`curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/install.sh | sh\`
+          **Install (Windows)**: \`irm https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/install.ps1 | iex\`
+          **Claude Code**: \`/plugin install rojohub --marketplace ${GITHUB_REPOSITORY}\`
+          **Codex**: \`codex mcp add rojohub -- rojohub mcp\`
+
+          Then \`rojohub install-plugin\` and \`rojohub install-service\`. \`RojoHub-mac.zip\` is the macOS app (universal, not notarized). \`SHA256SUMS\` covers every file.
+          EOF
+          gh release create "$GITHUB_REF_NAME" --title "RojoHub ${GITHUB_REF_NAME#v}" --notes-file notes.md dist/*

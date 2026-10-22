@@ -1,0 +1,62 @@
+#!/bin/sh
+# RojoHub launcher for the Claude Code plugin (macOS and Linux; bin/rojohub.exe is the
+# Windows counterpart). On first run it downloads the release binary that matches this
+# machine, checks it against the release's SHA256SUMS, and keeps it in the plugin's data
+# directory. Every run then hands over to that binary with the same arguments.
+#
+#   ROJOHUB_BIN=/path/to/rojohub   use that binary instead (development, air-gapped machines)
+#   CLAUDE_PLUGIN_DATA             where Claude Code keeps this plugin's data (set by Claude Code)
+set -eu
+
+VERSION="0.4.0"
+REPO="${ROJOHUB_REPO:-qflen/rojohub}"
+
+if [ -n "${ROJOHUB_BIN:-}" ]; then
+  exec "$ROJOHUB_BIN" "$@"
+fi
+
+fail() { echo "rojohub: $*" >&2; exit 1; }
+
+case "$(uname -s)" in
+  Darwin) os=macos ;;
+  Linux) os=linux ;;
+  *) fail "unsupported OS $(uname -s). Download a binary from https://github.com/$REPO/releases and set ROJOHUB_BIN." ;;
+esac
+case "$(uname -m)" in
+  arm64|aarch64) arch=arm64 ;;
+  x86_64|amd64) arch=x64 ;;
+  *) fail "unsupported CPU $(uname -m). Download a binary from https://github.com/$REPO/releases and set ROJOHUB_BIN." ;;
+esac
+asset="rojohub-$os-$arch"
+
+data="${CLAUDE_PLUGIN_DATA:-${ROJOHUB_HOME:-$HOME/.rojohub}/bin}"
+dir="$data/$VERSION"
+bin="$dir/rojohub"
+
+if [ ! -x "$bin" ]; then
+  mkdir -p "$dir"
+  base="https://github.com/$REPO/releases/download/v$VERSION"
+  tmp="$dir/.download.$$"
+  fetch() {
+    if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 3 "$1" -o "$2"
+    elif command -v wget >/dev/null 2>&1; then wget -qO "$2" "$1"
+    else fail "need curl or wget to download $1"
+    fi
+  }
+  echo "rojohub: downloading $asset $VERSION from $base" >&2
+  fetch "$base/$asset" "$tmp" || { rm -f "$tmp"; fail "could not download $base/$asset"; }
+  fetch "$base/SHA256SUMS" "$tmp.sums" || { rm -f "$tmp" "$tmp.sums"; fail "could not download $base/SHA256SUMS"; }
+  want="$(grep -E "[[:space:]]\*?$asset\$" "$tmp.sums" | awk '{print $1}' | head -1)"
+  if command -v sha256sum >/dev/null 2>&1; then got="$(sha256sum "$tmp" | awk '{print $1}')"
+  else got="$(shasum -a 256 "$tmp" | awk '{print $1}')"
+  fi
+  if [ -z "$want" ] || [ "$want" != "$got" ]; then
+    rm -f "$tmp" "$tmp.sums"
+    fail "checksum mismatch for $asset (expected ${want:-nothing listed}, got $got)"
+  fi
+  rm -f "$tmp.sums"
+  chmod 755 "$tmp"
+  mv "$tmp" "$bin"
+fi
+
+exec "$bin" "$@"

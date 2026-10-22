@@ -1,0 +1,16 @@
+{
+  "name": "rojohub",
+  "version": "0.4.0",
+  "description": "Run many Rojo projects and Roblox Studio windows side by side: reserved ports, PlaceId-locked syncing, Studio auto-connect, and Studio tools fenced to the project you are in.",
+  "author": { "name": "RojoHub contributors" },
+  "homepage": "https://github.com/qflen/rojohub",
+  "repository": "https://github.com/qflen/rojohub",
+  "license": "MIT",
+  "keywords": ["roblox", "rojo", "roblox-studio", "luau"],
+  "mcpServers": {
+    "rojohub": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/rojohub",
+      "args": ["mcp"]
+    }
+  }
+}

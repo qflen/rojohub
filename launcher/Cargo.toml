@@ -1,0 +1,11 @@
+[package]
+name = "rojohub-launcher"
+version = "0.4.0"
+edition = "2021"
+license = "MIT"
+description = "Windows launcher for the RojoHub Claude Code plugin: fetches and runs the release binary"
+publish = false
+
+[[bin]]
+name = "rojohub-launcher"
+path = "src/main.rs"

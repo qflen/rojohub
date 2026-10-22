@@ -1,0 +1,104 @@
+name: CI
+on: [push, pull_request]
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  ROJO_VERSION: 7.7.1
+  LUNE_VERSION: 0.10.4
+  CARGO_TERM_COLOR: always
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  sync-plugin:
+    name: sync plugin (rebuild matches, policy tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rojo and Lune
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/rojo.zip" "https://github.com/rojo-rbx/rojo/releases/download/v$ROJO_VERSION/rojo-$ROJO_VERSION-linux-x86_64.zip"
+          mkdir -p "$RUNNER_TEMP/tools" && python3 -m zipfile -e "$RUNNER_TEMP/rojo.zip" "$RUNNER_TEMP/tools"
+          curl -fsSL -o "$RUNNER_TEMP/lune.zip" "https://github.com/lune-org/lune/releases/download/v$LUNE_VERSION/lune-$LUNE_VERSION-linux-x86_64.zip"
+          python3 -m zipfile -e "$RUNNER_TEMP/lune.zip" "$RUNNER_TEMP/tools"
+          chmod +x "$RUNNER_TEMP"/tools/rojo "$RUNNER_TEMP"/tools/lune && echo "$RUNNER_TEMP/tools" >> "$GITHUB_PATH"
+      - name: Rebuild plugin/RojoHubSync.rbxm from the overlay and run the policy tests
+        run: |
+          scripts/build-sync-plugin.sh
+          git diff --exit-code --stat plugin/RojoHubSync.rbxm || { echo "plugin/RojoHubSync.rbxm is stale: run scripts/build-sync-plugin.sh and commit the result"; exit 1; }
+
+  launcher:
+    name: Windows launcher (builds from source, committed copy runs)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - run: cargo build --release -p rojohub-launcher
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rojohub-launcher-windows
+          path: target/release/rojohub-launcher.exe
+      - name: The committed bin/rojohub.exe hands over to ROJOHUB_BIN
+        shell: pwsh
+        run: |
+          $fresh = (Get-FileHash target/release/rojohub-launcher.exe -Algorithm SHA256).Hash
+          $committed = (Get-FileHash bin/rojohub.exe -Algorithm SHA256).Hash
+          Write-Host "fresh build $fresh"
+          Write-Host "committed   $committed (MSVC links are not byte-reproducible across runners; replace bin/rojohub.exe with this job's artifact after changing launcher/)"
+          $env:ROJOHUB_BIN = "$env:SystemRoot\System32\where.exe"
+          $out = & bin/rojohub.exe where.exe
+          if ($LASTEXITCODE -ne 0 -or -not ($out -match "where.exe")) { Write-Error "bin/rojohub.exe did not run ROJOHUB_BIN with its arguments: $out"; exit 1 }
+          Write-Host "bin/rojohub.exe ran ROJOHUB_BIN: $out"
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Unit tests
+        run: cargo test --workspace
+      - name: Release build
+        run: cargo build --release
+      - name: Install Rojo
+        shell: bash
+        run: |
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            Linux-X64) a=linux-x86_64 ;; Linux-ARM64) a=linux-aarch64 ;;
+            macOS-ARM64) a=macos-aarch64 ;; macOS-X64) a=macos-x86_64 ;;
+            Windows-X64) a=windows-x86_64 ;; Windows-ARM64) a=windows-aarch64 ;;
+            *) echo "unknown runner $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
+          esac
+          curl -fsSL -o "$RUNNER_TEMP/rojo.zip" "https://github.com/rojo-rbx/rojo/releases/download/v$ROJO_VERSION/rojo-$ROJO_VERSION-$a.zip"
+          mkdir -p "$RUNNER_TEMP/rojo" && python3 -m zipfile -e "$RUNNER_TEMP/rojo.zip" "$RUNNER_TEMP/rojo"
+          chmod +x "$RUNNER_TEMP"/rojo/rojo* && echo "$RUNNER_TEMP/rojo" >> "$GITHUB_PATH"
+      - name: Black-box tests against the release binary (end to end with Rojo, login service under CI=1)
+        shell: bash
+        run: |
+          BIN="$PWD/target/release/rojohub"; [ "$RUNNER_OS" = Windows ] && BIN="$BIN.exe"
+          rojo --version
+          ROJOHUB_BIN="$BIN" node --test test/cli.test.js test/daemon.test.js test/mcp.test.js test/rojo.test.js test/service.test.js
+      - name: The committed Windows plugin launcher hands over to the binary
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          want="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          got="$(ROJOHUB_BIN="$PWD/target/release/rojohub.exe" bin/rojohub.exe version)"
+          [ "$got" = "$want" ] || { echo "bin/rojohub.exe printed '$got', expected '$want'"; exit 1; }
+          echo "bin/rojohub.exe ran the binary: $got"

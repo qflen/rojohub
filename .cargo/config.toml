@@ -1,0 +1,5 @@
+# Reproducible Windows executables: without /Brepro the MSVC linker stamps the build time
+# into the PE header, so two builds of the same source differ. CI relies on this to check
+# that the committed bin/rojohub.exe launcher matches its source.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/Brepro"]

@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RojoHub</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke='%23d83a3a' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M16 16 5.6 10M16 16l10.4-6M16 16v12'/%3E%3C/g%3E%3Cg fill='%23d83a3a'%3E%3Ccircle cx='16' cy='16' r='5'/%3E%3Ccircle cx='5.6' cy='10' r='3'/%3E%3Ccircle cx='26.4' cy='10' r='3'/%3E%3Ccircle cx='16' cy='28' r='3'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f7f7f8; --panel: #ffffff; --ink: #111418; --mute: #5f6773; --faint: #9aa3ad;
+    --line: #e6e8eb; --hover: #f6f7f8; --brand: #d83a3a;
+    --ok: #15803d; --ok-bg: #dcfce7; --info: #1d4ed8; --info-bg: #dbeafe;
+    --warn: #b45309; --warn-bg: #fef3c7; --bad: #b91c1c; --bad-bg: #fee2e2; --off-bg: #eef0f2;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1013; --panel: #15181c; --ink: #e8eaed; --mute: #a1a9b3; --faint: #6b7380; --line: #252a31; --hover: #1a1e23;
+      --ok: #4ade80; --ok-bg: #0f2a1a; --info: #7aa7ff; --info-bg: #13213b;
+      --warn: #fbbf24; --warn-bg: #2d2210; --bad: #f87171; --bad-bg: #2f1414; --off-bg: #1e2228;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 28px 20px 64px; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 6px; }
+  svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  /* Tooltips: data-tip on anything; instant, unlike title=. */
+  [data-tip] { position: relative; }
+  [data-tip]:hover::after, [data-tip]:focus-visible::after {
+    content: attr(data-tip); position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: var(--bg); font: 500 12px/1.35 system-ui, sans-serif; padding: 5px 8px; border-radius: 6px;
+    white-space: nowrap; pointer-events: none; z-index: 10;
+  }
+  [data-tip].tip-left:hover::after { left: 0; transform: none; }
+
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 18px; letter-spacing: -.01em; }
+  .logo svg { width: 26px; height: 26px; }
+  .tagline { color: var(--mute); margin: 4px 0 22px; }
+  .stats { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; color: var(--mute); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .stat b { color: var(--ink); font-weight: 600; }
+
+  .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .bar[hidden] { display: none; }
+  .search { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 0 10px; color: var(--faint); }
+  .search input { flex: 1; min-width: 0; font: inherit; color: var(--ink); background: none; border: 0; padding: 8px 0; outline: none; }
+  .search:focus-within { border-color: var(--mute); }
+
+  .list { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+  .row { display: grid; grid-template-columns: minmax(0, 1fr) 92px 190px 150px 196px; gap: 16px; align-items: center; padding: 12px 16px; border-top: 1px solid var(--line); }
+  .row > * { min-width: 0; }
+  .list > .row:first-child { border-top: 0; }
+  .row.item:hover { background: var(--hover); }
+  .list > .row:last-child { border-radius: 0 0 12px 12px; }
+  .head { font-size: 12px; color: var(--faint); font-weight: 500; padding-top: 10px; padding-bottom: 10px; }
+  .head span { justify-self: start; cursor: help; border-bottom: 1px dotted var(--line); }
+  .head .r { justify-self: end; }
+
+  .game { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .icon { position: relative; width: 44px; height: 44px; flex: none; }
+  .icon .tile { width: 100%; height: 100%; border-radius: 10px; display: grid; place-items: center; font-weight: 650; font-size: 17px; color: #fff; overflow: hidden; }
+  .icon img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 10px; object-fit: cover; }
+  .icon .dot { position: absolute; right: -3px; bottom: -3px; width: 13px; height: 13px; border-radius: 50%; border: 2.5px solid var(--panel); background: var(--faint); }
+  .row.item:hover .icon .dot { border-color: var(--hover); }
+  .dot.ok { background: var(--ok); } .dot.info { background: var(--info); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+  .names { min-width: 0; }
+  .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sub { color: var(--mute); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sub .path { color: var(--faint); }
+  .err { color: var(--bad); font-size: 12.5px; margin-top: 3px; white-space: normal; }
+
+  .port { justify-self: start; display: inline-flex; align-items: center; gap: 6px; font: 600 14px var(--mono); padding: 4px 8px; margin-left: -8px; border-radius: 7px; }
+  .port svg { opacity: 0; color: var(--faint); width: 13px; height: 13px; }
+  .port:hover { background: var(--off-bg); } .port:hover svg { opacity: 1; }
+
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: var(--off-bg); color: var(--mute); white-space: nowrap; }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); } .pill.info { background: var(--info-bg); color: var(--info); }
+  .pill.warn { background: var(--warn-bg); color: var(--warn); } .pill.bad { background: var(--bad-bg); color: var(--bad); }
+  .meta { color: var(--faint); font-size: 12px; margin-top: 3px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .studio { font-size: 13px; color: var(--mute); display: flex; flex-direction: column; gap: 2px; }
+  .studio .win { display: flex; align-items: center; gap: 6px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .studio .none { color: var(--faint); }
+
+  .actions { display: flex; align-items: center; gap: 2px; justify-content: flex-end; }
+  .primary { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; padding: 6px 12px 6px 10px; border-radius: 8px; margin-right: 6px; min-width: 76px; justify-content: center; }
+  .primary.start { background: var(--ink); color: var(--bg); }
+  .primary.start:hover { opacity: .85; }
+  .primary.stop { border: 1px solid var(--line); background: var(--panel); }
+  .primary.stop:hover { border-color: var(--mute); }
+  .primary svg { width: 13px; height: 13px; }
+  .ib { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; color: var(--mute); text-decoration: none; }
+  .ib:hover { background: var(--off-bg); color: var(--ink); }
+  .ib[aria-expanded="true"] { background: var(--off-bg); color: var(--ink); }
+  .ib.gone { visibility: hidden; }
+  button:disabled { opacity: .45; cursor: default; }
+
+  .logs { grid-column: 1 / -1; margin: 0 0 4px 56px; max-height: 280px; overflow: auto; font: 12px/1.55 var(--mono); color: var(--mute); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; word-break: break-word; }
+
+  h2 { font-size: 13px; font-weight: 600; color: var(--mute); margin: 30px 0 4px; }
+  .h2sub { color: var(--faint); font-size: 13px; margin: 0 0 10px; }
+  .row.wide { grid-template-columns: minmax(0, 1fr); }
+  .row.wide .sub { white-space: normal; }
+  .empty { padding: 36px 28px; }
+  .empty b { display: block; font-size: 16px; margin-bottom: 14px; }
+  .empty ol { margin: 0; padding-left: 20px; color: var(--mute); display: grid; gap: 10px; }
+  .empty li::marker { color: var(--faint); font-weight: 600; }
+  code { font: 12.5px var(--mono); background: var(--off-bg); color: var(--ink); padding: 2px 6px; border-radius: 5px; }
+  footer { margin-top: 18px; color: var(--faint); font-size: 12.5px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .15s; pointer-events: none; max-width: 90vw; }
+  .toast.show { opacity: 1; }
+
+  @media (max-width: 860px) {
+    .head { display: none; }
+    .row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 10px; }
+    .port { grid-column: 2; grid-row: 1; }
+    .status, .studio { padding-left: 56px; grid-column: 1 / -1; }
+    .actions { grid-column: 1 / -1; justify-content: flex-start; padding-left: 56px; }
+    .logs { margin-left: 0; }
+    .ib.gone { display: none; }
+    .stats { margin-left: 0; width: 100%; }
+  }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4v16l13-8z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-restart" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></symbol>
+  <symbol id="i-logs" viewBox="0 0 24 24"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></symbol>
+  <symbol id="i-studio" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
+  <symbol id="i-window" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></symbol>
+</svg>
+<main>
+  <header>
+    <div class="logo">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <g fill="none" stroke="var(--brand)" stroke-width="2.4" stroke-linecap="round"><path d="M16 16 5.6 10M16 16l10.4-6M16 16v12"/></g>
+        <g fill="var(--brand)"><circle cx="16" cy="16" r="5"/><circle cx="5.6" cy="10" r="3"/><circle cx="26.4" cy="10" r="3"/><circle cx="16" cy="28" r="3"/></g>
+      </svg>
+      RojoHub
+    </div>
+    <div class="stats" id="stats"></div>
+  </header>
+  <p class="tagline">Every project has its own Rojo port and only syncs into its own Roblox place.</p>
+  <div class="bar" id="bar" hidden>
+    <label class="search"><svg class="i"><use href="#i-search"/></svg><input id="filter" type="search" placeholder="Search projects, places, folders or ids" autocomplete="off" spellcheck="false"></label>
+    <button class="primary stop" id="stopall" hidden><svg class="i"><use href="#i-stop"/></svg>Stop all</button>
+  </div>
+  <section id="projects" aria-live="polite"></section>
+  <footer id="footer"></footer>
+</main>
+<div class="toast" id="toast" role="status"></div>
+<script>
+const TOKEN = "__ROJOHUB_TOKEN__";
+const LIVE = ["running", "starting", "unhealthy"];
+const openLogs = new Set();
+const busy = new Set();
+const logCache = new Map();
+let last = null, lastHtml = "", filter = "";
+
+async function api(method, path) {
+  const res = await fetch(path, { method, headers: { Authorization: "Bearer " + TOKEN } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const icon = (name) => `<svg class="i" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const mb = (b) => (b == null ? "" : `${Math.round(b / 1048576)} MB`);
+// Minute resolution keeps the page from re-rendering every poll just because a clock ticked.
+function uptime(ts) {
+  const m = Math.floor((Date.now() - ts) / 60000);
+  if (m < 1) return "just started";
+  if (m < 60) return `up ${m} min`;
+  if (m < 1440) return `up ${Math.floor(m / 60)} h ${m % 60} min`;
+  return `up ${Math.floor(m / 1440)} d`;
+}
+let toastTimer;
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 1600);
+}
+async function copy(text, what) {
+  try { await navigator.clipboard.writeText(text); toast(`${what} copied`); } catch { toast(text); }
+}
+// Studio's own deep link, the one the "Edit in Studio" button on roblox.com uses.
+const studioLink = (p) => `roblox-studio:1+launchmode:edit+task:EditPlace+placeId:${p.placeIds[0]}${p.gameId ? `+universeId:${p.gameId}` : ""}`;
+
+async function act(id, action) {
+  busy.add(id); draw();
+  try { await api("POST", `/api/projects/${encodeURIComponent(id)}/${action}`); }
+  catch (e) { toast(e.message); }
+  busy.delete(id); refresh();
+}
+async function reveal(id) {
+  try { await api("POST", `/api/projects/${encodeURIComponent(id)}/reveal`); toast("Opened the project folder"); } catch (e) { toast(e.message); }
+}
+function toggleLogs(id) {
+  openLogs.has(id) ? openLogs.delete(id) : openLogs.add(id);
+  draw();
+}
+async function stopAll() {
+  const ids = last.projects.filter((p) => LIVE.includes(p.rojo.status)).map((p) => p.id);
+  await Promise.all(ids.map((id) => api("POST", `/api/projects/${encodeURIComponent(id)}/stop`).catch(() => {})));
+  refresh();
+}
+
+// One place that turns hub state into words a person can act on.
+function status(p) {
+  const r = p.rojo;
+  switch (r.status) {
+    case "running":
+      if (r.studioLink?.connected) return { tone: "ok", label: "Synced", tip: "Rojo is running and Studio is receiving your file changes" };
+      if (r.studioLink) return { tone: "info", label: "Waiting for Studio", tip: "Rojo is running. Open this place in Studio and it connects by itself" };
+      return { tone: "info", label: "Running", tip: "Rojo is running. Connect the Rojo plugin in Studio to this port" };
+    case "starting": return { tone: "warn", label: "Starting", tip: "Rojo is starting and being verified" };
+    case "unhealthy": return { tone: "warn", label: "Not responding", tip: "Rojo stopped answering. Restart it or check the logs" };
+    case "crashed": return { tone: "bad", label: "Crashed", tip: "Rojo exited on its own. The logs say why" };
+    case "error": return { tone: "bad", label: "Blocked", tip: "RojoHub refused to start this project. See the message below its name" };
+    default: return { tone: "", label: "Stopped", tip: "Not running. Press Start to serve this project" };
+  }
+}
+
+function initial(name) { return (name.match(/[A-Za-z0-9]/) || ["?"])[0].toUpperCase(); }
+function hue(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
+function iconHtml(p, tone) {
+  return `<div class="icon">
+    <div class="tile" style="background:hsl(${hue(p.id)} 45% 45%)">${esc(initial(p.placeName || p.name))}</div>
+    ${p.iconUrl ? `<img src="${esc(p.iconUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}
+    <span class="dot ${tone}"></span>
+  </div>`;
+}
+
+const idsText = (p) => `PlaceId ${p.placeIds.join(", ")}${p.gameId ? `, GameId ${p.gameId}` : ""}`;
+function placeText(p) {
+  const place = p.placeName || `Place ${p.placeIds[0]}`;
+  const more = p.placeIds.length > 1 ? ` +${p.placeIds.length - 1}` : "";
+  return p.gameName && p.gameName !== p.placeName ? `${place}${more} in ${p.gameName}` : place + more;
+}
+const shortPath = (d) => { const parts = d.split(/[\\/]/).filter(Boolean); return parts.length > 2 ? `…/${parts.slice(-2).join("/")}` : d; };
+
+function rowHtml(p) {
+  const s = status(p);
+  const live = LIVE.includes(p.rojo.status);
+  const b = busy.has(p.id);
+  const id = esc(p.id);
+  const meta = p.rojo.status === "running"
+    ? [p.rojo.startedAt && uptime(p.rojo.startedAt), mb(p.rojo.memory), p.rojo.verified?.serverVersion && `Rojo ${p.rojo.verified.serverVersion}`].filter(Boolean).join(" · ")
+    : "";
+  const studios = p.studios.length
+    ? p.studios.map((w) => `<span class="win" data-tip="Studio window, session ${esc(w.id.slice(0, 8))}">${icon("window")}${esc(w.placeName)}</span>`).join("")
+    : `<span class="none">Not open</span>`;
+  return `<div class="row item">
+    <div class="game">
+      ${iconHtml(p, s.tone)}
+      <div class="names">
+        <div class="name">${esc(p.name)}</div>
+        <div class="sub" title="${esc(idsText(p))}&#10;${esc(p.dir)}">${esc(placeText(p))} <span class="path">· ${esc(shortPath(p.dir))}</span></div>
+        ${p.rojo.error ? `<div class="err">${esc(p.rojo.error)}</div>` : ""}
+      </div>
+    </div>
+    <button class="port" data-tip="Copy port" onclick="copy('${p.port}', 'Port ${p.port}')">${p.port}${icon("copy")}</button>
+    <div class="status"><span class="pill ${s.tone}" data-tip="${esc(s.tip)}">${s.label}</span>${meta ? `<div class="meta">${esc(meta)}</div>` : ""}</div>
+    <div class="studio">${studios}</div>
+    <div class="actions">
+      ${live
+        ? `<button class="primary stop" onclick="act('${id}','stop')" ${b ? "disabled" : ""}>${icon("stop")}Stop</button>`
+        : `<button class="primary start" onclick="act('${id}','start')" ${b ? "disabled" : ""}>${icon("play")}${b ? "Starting" : "Start"}</button>`}
+      <button class="ib ${live ? "" : "gone"}" data-tip="Restart Rojo" aria-label="Restart Rojo" onclick="act('${id}','restart')" ${b ? "disabled" : ""}>${icon("restart")}</button>
+      <button class="ib" data-tip="Show Rojo output" aria-label="Show Rojo output" aria-expanded="${openLogs.has(p.id)}" onclick="toggleLogs('${id}')">${icon("logs")}</button>
+      <a class="ib" data-tip="Open place in Studio" aria-label="Open place in Studio" href="${studioLink(p)}">${icon("studio")}</a>
+      <button class="ib" data-tip="Open project folder" aria-label="Open project folder" onclick="reveal('${id}')">${icon("folder")}</button>
+    </div>
+    ${openLogs.has(p.id) ? `<pre class="logs" data-logs="${id}">${esc(logCache.get(p.id) || "Loading…")}</pre>` : ""}
+  </div>`;
+}
+
+const HEAD = `<div class="row head">
+  <span data-tip="The Rojo project and the Roblox place it is locked to" class="tip-left">Project</span>
+  <span data-tip="Rojo port reserved for this project">Port</span>
+  <span data-tip="Whether Rojo is running and Studio is syncing">Status</span>
+  <span data-tip="Studio windows that have this place open">Studio</span>
+  <span class="r"></span>
+</div>`;
+
+const EMPTY = `<div class="list empty"><b>Add your first project</b><ol>
+  <li>Open your published place in Roblox Studio.</li>
+  <li>In the Rojo project folder, run <code>rojohub add . --from-studio</code></li>
+  <li>Run <code>rojohub start</code>, or press Start here. Studio connects by itself.</li>
+</ol></div>`;
+
+function matches(p) {
+  if (!filter) return true;
+  const hay = `${p.name} ${p.placeName || ""} ${p.gameName || ""} ${p.dir} ${p.placeIds.join(" ")} ${p.gameId || ""} ${p.port}`.toLowerCase();
+  return filter.split(/\s+/).every((w) => hay.includes(w));
+}
+const rank = (p) => (p.rojo.status === "running" ? 0 : LIVE.includes(p.rojo.status) ? 1 : ["error", "crashed"].includes(p.rojo.status) ? 2 : 3);
+
+function draw() {
+  const s = last;
+  if (!s) return;
+  const running = s.projects.filter((p) => p.rojo.status === "running");
+  const synced = running.filter((p) => p.rojo.studioLink?.connected).length;
+  const rojoMem = running.reduce((a, p) => a + (p.rojo.memory || 0), 0);
+
+  const stats = `<span class="stat" data-tip="Projects with a Rojo server running"><b>${running.length}</b> of ${s.projects.length} running</span>
+    <span class="stat" data-tip="Projects Studio is live-syncing"><b>${synced}</b> synced</span>
+    <span class="stat" data-tip="Memory used by all Rojo servers">${mb(rojoMem)}</span>`;
+  const statsEl = document.getElementById("stats");
+  if (statsEl.innerHTML !== stats) statsEl.innerHTML = stats;
+
+  document.getElementById("bar").hidden = s.projects.length < 5;
+  document.getElementById("stopall").hidden = running.length < 2;
+
+  const shown = s.projects.filter(matches).sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  const loose = s.studios.filter((x) => x.binding.status !== "bound");
+  let html = !s.projects.length ? EMPTY
+    : `<div class="list">${HEAD}${shown.length ? shown.map(rowHtml).join("") : `<div class="row"><span class="none">No project matches “${esc(filter)}”.</span></div>`}</div>`;
+  html += loose.length
+    ? `<h2>Studio windows without a project</h2><p class="h2sub">These places are open in Studio but no project is bound to them, so nothing syncs.</p><div class="list">` + loose.map((x) => {
+        const blocked = ["mismatch", "conflict"].includes(x.binding.status);
+        return `<div class="row wide"><div class="game">
+          <div class="icon"><div class="tile" style="background:var(--off-bg);color:var(--mute)">${icon("window")}</div><span class="dot ${blocked ? "bad" : "warn"}"></span></div>
+          <div class="names"><div class="name">${esc(x.placeName)}</div><div class="sub">${x.binding.messages.map(esc).join(" ")}</div></div>
+        </div></div>`;
+      }).join("") + `</div>`
+    : "";
+  // Only touch the DOM when something visible changed, so hover and focus survive polling.
+  if (html !== lastHtml) {
+    lastHtml = html;
+    document.getElementById("projects").innerHTML = html;
+  }
+  for (const id of openLogs) {
+    api("GET", `/api/projects/${encodeURIComponent(id)}/logs`).then(({ logs }) => {
+      const text = logs.join("\n") || "No output yet.";
+      const el = document.querySelector(`[data-logs="${CSS.escape(id)}"]`);
+      if (el && el.textContent !== text) { el.textContent = text; el.scrollTop = el.scrollHeight; }
+      logCache.set(id, text);
+    }).catch(() => {});
+  }
+
+  document.getElementById("footer").innerHTML =
+    `<span>RojoHub ${esc(s.hub.version)}</span><span>Engine ${esc(s.hub.engine)}</span><span>Ports ${s.hub.portRange.join("–")}</span><span>Hub ${mb(s.hub.memory)}</span>`;
+}
+
+async function refresh() {
+  try { last = await api("GET", "/api/status"); draw(); }
+  catch { document.getElementById("footer").innerHTML = `<span style="color:var(--bad)">The hub is not running. Start it with <code>rojohub daemon</code>, then reload.</span>`; }
+}
+document.getElementById("filter").addEventListener("input", (e) => { filter = e.target.value.trim().toLowerCase(); draw(); });
+document.getElementById("stopall").addEventListener("click", stopAll);
+refresh();
+setInterval(() => { if (!document.hidden) refresh(); }, 2000);
+</script>
+</body>
+</html>
