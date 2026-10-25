@@ -118,6 +118,36 @@ test("start, verify, proxy, detect a Studio subscription, health, logs and stop 
   await assert.rejects(fetch(`http://127.0.0.1:${project.port}/api/rojo`, { signal: AbortSignal.timeout(1000) }));
 });
 
+test("a crashed Rojo restarts behind the same public port", { skip: !ROJO && "no rojo binary" }, async () => {
+  const crashDir = writeProject(tempDir("crash"), [456]);
+  temps.push(crashDir);
+  const added = await (await api("/api/projects", { method: "POST", body: JSON.stringify({ dir: crashDir, placeIds: [456] }) })).json();
+  const id = added.project.id;
+  const started = await (await api(`/api/projects/${id}/start`, { method: "POST" })).json();
+  assert.equal(started.project.rojo.status, "running");
+  const { port } = started.project;
+  const oldPid = started.project.rojo.pid;
+
+  process.kill(oldPid, "SIGKILL");
+  const recovered = await until(async () => {
+    const p = (await (await api("/api/status")).json()).projects.find((x) => x.id === id);
+    return p.rojo.status === "running" && p.rojo.pid !== oldPid ? p : null;
+  }, 15000, "Rojo to restart");
+  assert.equal(recovered.port, port);
+  assert.equal(recovered.rojo.restartCount, 1);
+  assert.deepEqual(recovered.rojo.verified.expectedPlaceIds, [456]);
+  assert.equal((await fetch(`http://127.0.0.1:${port}/api/rojo`)).status, 200);
+  const { logs } = await (await api(`/api/projects/${id}/logs`)).json();
+  assert.ok(logs.some((line) => line.includes("restarting (1)")), logs.join("\n"));
+  process.kill(recovered.rojo.pid, "SIGKILL");
+  const stopped = await (await api(`/api/projects/${id}/stop`, { method: "POST" })).json();
+  assert.equal(stopped.project.rojo.status, "stopped");
+  await new Promise((r) => setTimeout(r, 700));
+  const stillStopped = (await (await api("/api/status")).json()).projects.find((x) => x.id === id);
+  assert.equal(stillStopped.rojo.status, "stopped");
+  assert.equal(stillStopped.rojo.pid, null);
+});
+
 test("a Rojo left behind by a crashed hub is reaped on startup", { skip: !ROJO && "no rojo binary" }, async () => {
   const home = tempDir("home");
   temps.push(home);

@@ -1,8 +1,9 @@
 //! Rojo process supervision: start a server on a private port behind the project's proxy,
 //! verify it is the right project, keep it healthy, stop it, and reap leftovers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -19,7 +20,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, Command};
 use tokio::sync::{oneshot, watch};
 
-use crate::config::{find_tool, pids_file, port_range, resolve_engine, tool_path, HUB_HOST};
+use crate::config::{
+    find_tool, pids_file, port_range, resolve_engine, tool_path, user_home, HUB_HOST,
+};
 use crate::hub::{Hub, ProcHandle};
 use crate::msgpack::{decode_rojo_body, RojoInfo};
 use crate::ports::allocate_port;
@@ -43,6 +46,76 @@ fn ids_text(ids: &[u64]) -> String {
         .map(u64::to_string)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn old_rojo_version(version: &str) -> bool {
+    let core = version.split(['-', '+']).next().unwrap_or("");
+    let parts: Vec<&str> = core.split('.').collect();
+    parts.len() >= 2
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        && parts[0].parse::<u64>().is_ok_and(|major| major < 7)
+}
+
+fn record_crash(crashes: &mut VecDeque<Instant>, now: Instant) -> usize {
+    while crashes
+        .front()
+        .is_some_and(|at| now.duration_since(*at) >= Duration::from_secs(60))
+    {
+        crashes.pop_front();
+    }
+    crashes.push_back(now);
+    crashes.len()
+}
+
+fn rokit_missing_message(dir: &str, bin: &Path) -> Option<String> {
+    if bin
+        != user_home()
+            .join(".rokit")
+            .join("bin")
+            .join(if cfg!(windows) { "rojo.exe" } else { "rojo" })
+    {
+        return None;
+    }
+    for parent in Path::new(dir).ancestors() {
+        let config = parent.join("rokit.toml");
+        let Ok(raw) = fs::read_to_string(&config) else {
+            continue;
+        };
+        let mut in_tools = false;
+        for line in raw.lines() {
+            let line = line.trim();
+            if line.starts_with('[') {
+                in_tools = line == "[tools]";
+                continue;
+            }
+            if !in_tools {
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            if key.trim().trim_matches('"') != "rojo" {
+                continue;
+            }
+            let value = value.trim().trim_start_matches(['"', '\'']);
+            let version = value
+                .split(['"', '\'', ' ', '#'])
+                .next()?
+                .rsplit_once('@')?
+                .1;
+            if version.is_empty() {
+                return None;
+            }
+            return Some(format!(
+                "Rojo {version} pinned in {} is not installed. Run `rokit install` there.",
+                config.display()
+            ));
+        }
+        return None;
+    }
+    None
 }
 
 // ---------- pids.json: Rojo servers a crashed hub might leave behind ----------
@@ -283,79 +356,107 @@ async fn terminate(child: &mut Child) -> Option<std::process::ExitStatus> {
 
 /// Owns a Rojo child for its whole life: collects its output, stops it on request and
 /// records how it ended.
-async fn supervise(
+fn supervise(
     hub: Arc<Hub>,
     id: String,
     generation: u64,
     mut child: Child,
     kill_rx: oneshot::Receiver<()>,
     exited_tx: watch::Sender<bool>,
-) {
-    let mut readers = Vec::new();
-    if let Some(out) = child.stdout.take() {
-        readers.push(tokio::spawn(read_lines(
-            hub.clone(),
-            id.clone(),
-            generation,
-            out,
-        )));
-    }
-    if let Some(err) = child.stderr.take() {
-        readers.push(tokio::spawn(read_lines(
-            hub.clone(),
-            id.clone(),
-            generation,
-            err,
-        )));
-    }
-    let status = tokio::select! {
-        s = child.wait() => s.ok(),
-        _ = kill_rx => terminate(&mut child).await,
-    };
-    for r in readers {
-        let _ = r.await;
-    }
-    let code = status.and_then(|s| s.code());
-    #[cfg(unix)]
-    let signal = {
-        use std::os::unix::process::ExitStatusExt;
-        status.and_then(|s| s.signal()).map(signal_name)
-    };
-    #[cfg(not(unix))]
-    let signal: Option<String> = None;
-    {
-        let mut inner = hub.lock();
-        let r = inner.runtime(&id);
-        if r.generation == generation {
-            r.push_log(&format!(
-                "rojo exited (code {}, signal {})",
-                code.map(|c| c.to_string()).unwrap_or_else(|| "null".into()),
-                signal.clone().unwrap_or_else(|| "null".into())
-            ));
-            forget_pid(&id);
-            r.proc = None;
-            r.pid = None;
-            r.memory = None;
-            if let Some(px) = r.proxy.take() {
-                px.shutdown();
-            }
-            if r.stopping {
-                inner.set_status(&id, "stopped", None);
-            } else if r.status != "error" {
-                let how = match (&signal, code) {
-                    (Some(sig), _) => format!("signal {sig}"),
-                    (None, Some(c)) => format!("code {c}"),
-                    (None, None) => "code null".to_string(),
-                };
-                inner.set_status(
-                    &id,
-                    "crashed",
-                    Some(format!("Rojo exited unexpectedly ({how}). See logs.")),
-                );
+    rokit_missing: Option<String>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+    Box::pin(async move {
+        let mut readers = Vec::new();
+        if let Some(out) = child.stdout.take() {
+            readers.push(tokio::spawn(read_lines(
+                hub.clone(),
+                id.clone(),
+                generation,
+                out,
+                rokit_missing.clone(),
+            )));
+        }
+        if let Some(err) = child.stderr.take() {
+            readers.push(tokio::spawn(read_lines(
+                hub.clone(),
+                id.clone(),
+                generation,
+                err,
+                rokit_missing.clone(),
+            )));
+        }
+        let status = tokio::select! {
+            s = child.wait() => s.ok(),
+            _ = kill_rx => terminate(&mut child).await,
+        };
+        let mut missing_pin = false;
+        for r in readers {
+            missing_pin |= r.await.unwrap_or(false);
+        }
+        let code = status.and_then(|s| s.code());
+        #[cfg(unix)]
+        let signal = {
+            use std::os::unix::process::ExitStatusExt;
+            status.and_then(|s| s.signal()).map(signal_name)
+        };
+        #[cfg(not(unix))]
+        let signal: Option<String> = None;
+        let mut restart = false;
+        {
+            let mut inner = hub.lock();
+            let r = inner.runtime(&id);
+            if r.generation == generation {
+                r.push_log(&format!(
+                    "rojo exited (code {}, signal {})",
+                    code.map(|c| c.to_string()).unwrap_or_else(|| "null".into()),
+                    signal.clone().unwrap_or_else(|| "null".into())
+                ));
+                forget_pid(&id);
+                r.proc = None;
+                r.pid = None;
+                r.memory = None;
+                if r.stopping {
+                    r.proxy.take();
+                    inner.set_status(&id, "stopped", None);
+                } else if missing_pin {
+                    r.proxy.take();
+                    let msg = rokit_missing.unwrap();
+                    r.push_log(&msg);
+                    inner.set_status(&id, "error", Some(msg));
+                } else if r.status != "error" {
+                    let how = match (&signal, code) {
+                        (Some(sig), _) => format!("signal {sig}"),
+                        (None, Some(c)) => format!("code {c}"),
+                        (None, None) => "code null".to_string(),
+                    };
+                    let count = record_crash(&mut r.crashes, Instant::now());
+                    if count >= 3 {
+                        r.proxy.take();
+                        let msg = "Rojo kept crashing (3 times in 60s). Check the logs with `rojohub logs <project>`.";
+                        r.push_log(msg);
+                        inner.set_status(&id, "error", Some(msg.into()));
+                    } else {
+                        r.restart_count += 1;
+                        r.push_log(&format!(
+                            "Rojo exited unexpectedly ({how}); restarting ({}).",
+                            r.restart_count
+                        ));
+                        inner.set_status(&id, "starting", None);
+                        restart = true;
+                    }
+                } else {
+                    r.proxy.take();
+                }
             }
         }
-    }
-    let _ = exited_tx.send(true);
+        let _ = exited_tx.send(true);
+        if restart {
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                let _ = hub.start_project_inner(&id, Some(generation)).await;
+            });
+        }
+    })
 }
 
 async fn read_lines<R: tokio::io::AsyncRead + Unpin>(
@@ -363,12 +464,18 @@ async fn read_lines<R: tokio::io::AsyncRead + Unpin>(
     id: String,
     generation: u64,
     reader: R,
-) {
+    rokit_missing: Option<String>,
+) -> bool {
     let mut lines = BufReader::new(reader).lines();
+    let mut missing_pin = false;
     while let Ok(Some(line)) = lines.next_line().await {
         let line = strip_ansi(&line);
         let line = line.trim_end_matches('\r');
         if line.is_empty() {
+            continue;
+        }
+        if rokit_missing.is_some() && line == "ERROR No such file or directory (os error 2)" {
+            missing_pin = true;
             continue;
         }
         let mut inner = hub.lock();
@@ -377,6 +484,7 @@ async fn read_lines<R: tokio::io::AsyncRead + Unpin>(
             r.push_log(line);
         }
     }
+    missing_pin
 }
 
 impl Hub {
@@ -397,13 +505,27 @@ impl Hub {
     }
 
     pub async fn start_project(self: &Arc<Self>, id: &str) -> Result<Value, String> {
+        self.start_project_inner(id, None).await
+    }
+
+    async fn start_project_inner(
+        self: &Arc<Self>,
+        id: &str,
+        restart: Option<u64>,
+    ) -> Result<Value, String> {
         let mut project = {
             let mut inner = self.lock();
+            if inner.shutting_down {
+                return Err("Hub is shutting down.".into());
+            }
             let p = inner
                 .find_project(id)
                 .cloned()
                 .ok_or_else(|| format!("Unknown project \"{id}\"."))?;
             let r = inner.runtime(&p.id);
+            if restart.is_some_and(|generation| r.generation != generation || r.stopping) {
+                return Err("Restart canceled.".into());
+            }
             if r.proc.is_some() && r.is_live() {
                 return Ok(r.info());
             }
@@ -414,7 +536,9 @@ impl Hub {
         let check = check_project_file(&project.project_file, &project.place_ids);
         if !check.ok {
             let e = check.error.unwrap_or_else(|| "Invalid project file".into());
-            self.lock().set_status(&pid_key, "error", Some(e.clone()));
+            let mut inner = self.lock();
+            inner.runtime(&pid_key).proxy.take();
+            inner.set_status(&pid_key, "error", Some(e.clone()));
             return Err(e);
         }
         {
@@ -443,38 +567,50 @@ impl Hub {
                         other.name,
                         ids_text(&shared)
                     );
+                    inner.runtime(&pid_key).proxy.take();
                     inner.set_status(&pid_key, "error", Some(msg.clone()));
                     return Err(msg);
                 }
             }
         }
 
+        let existing_private = self
+            .lock()
+            .runtimes
+            .get(&pid_key)
+            .and_then(|r| r.proxy.as_ref().map(|p| p.private_port));
         let (lo, hi) = port_range();
-        if project.port < lo || project.port > hi {
+        if existing_private.is_none() && (project.port < lo || project.port > hi) {
             let old = self.reassign_port(&mut project).await?;
             self.lock().runtime(&pid_key).push_log(&format!(
                 "Port {old} is outside the port range {lo}-{hi}; moved to {}.",
                 project.port
             ));
         }
-        let listener = match TcpListener::bind((HUB_HOST, project.port)).await {
-            Ok(l) => l,
-            Err(_) => {
-                let old = self.reassign_port(&mut project).await?;
-                self.lock().runtime(&pid_key).push_log(&format!(
+        let listener = if existing_private.is_some() {
+            None
+        } else {
+            Some(match TcpListener::bind((HUB_HOST, project.port)).await {
+                Ok(l) => l,
+                Err(_) => {
+                    let old = self.reassign_port(&mut project).await?;
+                    self.lock().runtime(&pid_key).push_log(&format!(
                     "Port {old} was in use by something else; moved to {}. Update the Rojo plugin port in Studio.",
                     project.port
                 ));
-                log(&format!(
-                    "{}: port {old} busy, reassigned to {}",
-                    project.name, project.port
-                ));
-                TcpListener::bind((HUB_HOST, project.port))
-                    .await
-                    .map_err(|e| format!("Could not listen on port {}: {e}", project.port))?
-            }
+                    log(&format!(
+                        "{}: port {old} busy, reassigned to {}",
+                        project.name, project.port
+                    ));
+                    TcpListener::bind((HUB_HOST, project.port))
+                        .await
+                        .map_err(|e| format!("Could not listen on port {}: {e}", project.port))?
+                }
+            })
         };
-        let private_port = {
+        let private_port = if let Some(port) = existing_private {
+            port
+        } else {
             let l = TcpListener::bind((HUB_HOST, 0))
                 .await
                 .map_err(|e| format!("Could not pick a private port: {e}"))?;
@@ -486,6 +622,7 @@ impl Hub {
             resolve_engine(project.rojo_bin.as_deref(), inner.state.engine.as_deref())
         };
         let bin_path = find_tool(&engine.bin);
+        let rokit_missing = rokit_missing_message(&project.dir, &bin_path);
         let private_s = private_port.to_string();
         let args = [
             "serve",
@@ -498,8 +635,14 @@ impl Hub {
 
         let generation = {
             let mut inner = self.lock();
+            if inner.shutting_down {
+                return Err("Hub is shutting down.".into());
+            }
             let changes = self.changes.clone();
             let r = inner.runtime(&pid_key);
+            if restart.is_some_and(|generation| r.generation != generation || r.stopping) {
+                return Err("Restart canceled.".into());
+            }
             if r.proc.is_some() && r.is_live() {
                 return Ok(r.info());
             }
@@ -507,11 +650,16 @@ impl Hub {
             r.push_log(&format!("$ {} {}", engine.bin, args.join(" ")));
             r.status = "starting".into();
             r.error = None;
+            r.warning = None;
             r.verified = None;
             r.failures = 0;
             r.stopping = false;
             r.memory = None;
             r.started_at = Some(now_ms());
+            if restart.is_none() {
+                r.restart_count = 0;
+                r.crashes.clear();
+            }
             r.generation += 1;
             let generation = r.generation;
 
@@ -534,6 +682,7 @@ impl Hub {
                     };
                     r.push_log(&msg);
                     r.proc = None;
+                    r.proxy.take();
                     inner.set_status(&pid_key, "error", Some(msg.clone()));
                     return Err(msg);
                 }
@@ -548,7 +697,9 @@ impl Hub {
                         kill: Some(kill_tx),
                         exited: exited_rx,
                     });
-                    r.proxy = Some(spawn_proxy(listener, private_port, changes));
+                    if let Some(listener) = listener {
+                        r.proxy = Some(spawn_proxy(listener, private_port, changes));
+                    }
                     tokio::spawn(supervise(
                         self.clone(),
                         pid_key.clone(),
@@ -556,6 +707,7 @@ impl Hub {
                         child,
                         kill_rx,
                         exited_tx,
+                        rokit_missing,
                     ));
                     inner.notify_all();
                     generation
@@ -579,6 +731,15 @@ impl Hub {
             }
             if let Some(raw) = probe_rojo(private_port, Duration::from_millis(1500)).await {
                 let info = RojoInfo::from_value(&raw);
+                if old_rojo_version(&info.server_version) {
+                    let warning = format!("Rojo {} is too old for the bundled sync plugin. Run `rokit add rojo-rbx/rojo@7.7.1` and then `rokit install` in {}.", info.server_version, project.dir);
+                    let mut inner = self.lock();
+                    let r = inner.runtime(&pid_key);
+                    if r.generation == generation {
+                        r.push_log(&format!("warning: {warning}"));
+                        r.warning = Some(warning);
+                    }
+                }
                 match verify(&project, check.name.as_deref(), &info) {
                     Err(e) => {
                         self.lock().runtime(&pid_key).push_log(&e);
@@ -633,9 +794,10 @@ impl Hub {
             let r = inner.runtime(id);
             match r.proc.as_mut() {
                 None => {
-                    if r.status != "error" {
-                        inner.set_status(id, "stopped", None);
-                    }
+                    r.stopping = true;
+                    r.generation += 1;
+                    r.proxy.take();
+                    inner.set_status(id, "stopped", None);
                     return inner.runtime_info(id);
                 }
                 Some(p) => {
@@ -653,13 +815,11 @@ impl Hub {
     }
 
     pub async fn stop_all(self: &Arc<Self>) {
-        let ids: Vec<String> = self
-            .lock()
-            .runtimes
-            .iter()
-            .filter(|(_, r)| r.proc.is_some())
-            .map(|(id, _)| id.clone())
-            .collect();
+        let ids: Vec<String> = {
+            let mut inner = self.lock();
+            inner.shutting_down = true;
+            inner.runtimes.keys().cloned().collect()
+        };
         let mut set = tokio::task::JoinSet::new();
         for id in ids {
             let hub = self.clone();
@@ -793,6 +953,35 @@ mod tests {
         );
         let err = verify(&project(), None, &other_place).unwrap_err();
         assert!(err.contains("expectedPlaceIds=[5]"), "{err}");
+    }
+
+    #[test]
+    fn crash_limit_resets_after_sixty_seconds() {
+        let mut crashes = VecDeque::new();
+        let start = Instant::now();
+        assert_eq!(record_crash(&mut crashes, start), 1);
+        assert_eq!(
+            record_crash(&mut crashes, start + Duration::from_secs(1)),
+            2
+        );
+        assert_eq!(
+            record_crash(&mut crashes, start + Duration::from_secs(2)),
+            3
+        );
+        assert_eq!(
+            record_crash(&mut crashes, start + Duration::from_secs(62)),
+            1
+        );
+    }
+
+    #[test]
+    fn compares_rojo_major_version() {
+        for version in ["6.0.0", "6.2.1-rc.1", "0.7.7"] {
+            assert!(old_rojo_version(version), "{version}");
+        }
+        for version in ["7.0.0", "7.7.0-rc.1", "7.7.1+build", "8.0", "?", "v6.0.0"] {
+            assert!(!old_rojo_version(version), "{version}");
+        }
     }
 
     #[test]

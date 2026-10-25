@@ -114,6 +114,48 @@ The sync plugin is installed as `RojoManagedPlugin.rbxm`, the file name `rojo pl
 | `ROJOHUB_PLUGINS_DIR` | Studio plugins folder: `~/Documents/Roblox/Plugins` on macOS, `%LOCALAPPDATA%\Roblox\Plugins` on Windows, Vinegar's Wine prefix on Linux |
 | `ROJOHUB_BIN` | Makes the plugin launcher run this binary instead of downloading one |
 
+## Troubleshooting
+
+First look at the dashboard, `rojohub logs <project>`, and `~/.rojohub/hub.log` (or `rojohub daemon` in the foreground).
+
+### Install and hub
+
+- **"RojoHub is not running"** or **"RojoHub is not running at ..."**: run `rojohub daemon` or `rojohub install-service`, then restart Studio.
+- **"Could not find \"rojo\""**: install Rojo or set `ROJOHUB_ROJO_BIN` to its binary.
+- **"Rojo <version> pinned in <dir>/rokit.toml is not installed"**: run `rokit install` in that directory. The hub runs Rojo from the project folder, so Rokit uses its pin.
+- **"Rojo <version> is too old for the bundled sync plugin"**: in the project folder run `rokit add rojo-rbx/rojo@7.7.1`, then `rokit install`.
+
+### Add a project
+
+- **"No unbound Studio window found"**: open the published place in Studio with the RojoHub plugin, or use `rojohub add . --place <PlaceId>`.
+- **"No project file at ..."**: pass `--project <file>` to `rojohub add`.
+- **"servePlaceIds ... must include ..."**: run `rojohub add` again or add the registered PlaceIds to the project file.
+- **"Rojo is not restricting places"** or **"Port ... answered as project ..."**: check the project file's name and `servePlaceIds`, then restart it.
+- **"Refusing to start: ... is already serving place ..."**: stop the other project first.
+- **"Rojo kept crashing (3 times in 60s)"**: read `rojohub logs <project>`; fix Rojo's error, then start the project again. A single crash is logged as **"Rojo exited unexpectedly ...; restarting"**.
+
+### Ports
+
+- **"Port ... is busy"**: another hub may already be running; check `rojohub status`.
+- **"Port ... was in use by something else; moved to ..."**: use the new port shown in the dashboard if using the stock Rojo plugin.
+- **"All ports ... are in use"**: stop a project or widen `ROJOHUB_PORT_RANGE`.
+- **"Rojo did not answer on its port within 30s"** or **"Rojo stopped answering"**: check `rojohub logs <project>` and restart it.
+
+### Studio
+
+- **"Place not published"**: publish the place in Studio before syncing.
+- **"No project for this place"**: run `rojohub add . --place <PlaceId>` from its project folder.
+- **"Wrong game — blocked"**: the open place's GameId differs from the registered one; open the right game or correct the registration.
+- **"Ambiguous project — blocked"**: several projects serve that PlaceId; start exactly one.
+- **"Waiting for Studio"**: open the bound place in Studio and allow its prompt to connect to 127.0.0.1; check that the RojoHub sync plugin is installed.
+
+### Agents
+
+- **"... is not inside a project registered with RojoHub"**: run the agent from a registered project folder, or register it with `rojohub add`.
+- **"This agent is working in ... and may only control that project"**: run it from the intended project folder. `ROJOHUB_ALLOW_ANY_PROJECT=1` lifts this lock.
+- **"Several Studio windows have ... open. Pass a session id"**: pass the session id shown by `rojo_info`.
+- **"Timed out: no Studio connected"**: open the place with the sync plugin and wait for Synced before using Studio tools.
+
 ## Building and development
 
 ```sh

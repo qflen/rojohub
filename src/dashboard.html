@@ -73,6 +73,7 @@
   .sub { color: var(--mute); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sub .path { color: var(--faint); }
   .err { color: var(--bad); font-size: 12.5px; margin-top: 3px; white-space: normal; }
+  .err.warn { color: var(--warn); }
 
   .port { justify-self: start; display: inline-flex; align-items: center; gap: 6px; font: 600 14px var(--mono); padding: 4px 8px; margin-left: -8px; border-radius: 7px; }
   .port svg { opacity: 0; color: var(--faint); width: 13px; height: 13px; }
@@ -256,8 +257,8 @@ function rowHtml(p) {
   const b = busy.has(p.id);
   const id = esc(p.id);
   const meta = p.rojo.status === "running"
-    ? [p.rojo.startedAt && uptime(p.rojo.startedAt), mb(p.rojo.memory), p.rojo.verified?.serverVersion && `Rojo ${p.rojo.verified.serverVersion}`].filter(Boolean).join(" · ")
-    : "";
+    ? [p.rojo.startedAt && uptime(p.rojo.startedAt), mb(p.rojo.memory), p.rojo.verified?.serverVersion && `Rojo ${p.rojo.verified.serverVersion}`, p.rojo.restartCount > 0 && `Restarted ${p.rojo.restartCount}×`].filter(Boolean).join(" · ")
+    : p.rojo.restartCount > 0 ? `Restarted ${p.rojo.restartCount}×` : "";
   const studios = p.studios.length
     ? p.studios.map((w) => `<span class="win" data-tip="Studio window, session ${esc(w.id.slice(0, 8))}">${icon("window")}${esc(w.placeName)}</span>`).join("")
     : `<span class="none">Not open</span>`;
@@ -268,6 +269,7 @@ function rowHtml(p) {
         <div class="name">${esc(p.name)}</div>
         <div class="sub" title="${esc(idsText(p))}&#10;${esc(p.dir)}">${esc(placeText(p))} <span class="path">· ${esc(shortPath(p.dir))}</span></div>
         ${p.rojo.error ? `<div class="err">${esc(p.rojo.error)}</div>` : ""}
+        ${p.rojo.warning ? `<div class="err warn">${esc(p.rojo.warning)}</div>` : ""}
       </div>
     </div>
     <button class="port" data-tip="Copy port" onclick="copy('${p.port}', 'Port ${p.port}')">${p.port}${icon("copy")}</button>

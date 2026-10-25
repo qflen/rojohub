@@ -204,6 +204,12 @@ fn describe(p: &Value) -> String {
             p["gameId"].as_u64().map(|g| format!("  GameId: {g}")).unwrap_or_default()
         ),
     ];
+    if let Some(count) = rojo["restartCount"].as_u64().filter(|c| *c > 0) {
+        lines.push(format!("Rojo restarts: {count}"));
+    }
+    if let Some(warning) = rojo["warning"].as_str() {
+        lines.push(format!("Warning: {warning}"));
+    }
     if let Some(link) = rojo.get("studioLink").filter(|l| l.is_object()) {
         let text = if link["connected"].as_bool().unwrap_or(false) {
             let clients: Vec<String> = link["clients"]

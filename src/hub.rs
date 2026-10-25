@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
+use std::time::Instant;
 
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -25,6 +26,7 @@ pub struct Runtime {
     pub status: String,
     pub logs: VecDeque<String>,
     pub error: Option<String>,
+    pub warning: Option<String>,
     pub pid: Option<u32>,
     pub verified: Option<Value>,
     pub failures: u32,
@@ -32,6 +34,8 @@ pub struct Runtime {
     pub engine: Option<String>,
     pub memory: Option<u64>,
     pub stopping: bool,
+    pub restart_count: u32,
+    pub crashes: VecDeque<Instant>,
     /// Bumped on every start, so a stale supervisor task never touches a newer run.
     pub generation: u64,
     pub proc: Option<ProcHandle>,
@@ -44,6 +48,7 @@ impl Default for Runtime {
             status: "stopped".to_string(),
             logs: VecDeque::new(),
             error: None,
+            warning: None,
             pid: None,
             verified: None,
             failures: 0,
@@ -51,6 +56,8 @@ impl Default for Runtime {
             engine: None,
             memory: None,
             stopping: false,
+            restart_count: 0,
+            crashes: VecDeque::new(),
             generation: 0,
             proc: None,
             proxy: None,
@@ -78,6 +85,8 @@ impl Runtime {
         json!({
             "status": self.status,
             "error": self.error,
+            "warning": self.warning,
+            "restartCount": self.restart_count,
             "pid": self.pid,
             "verified": self.verified,
             "startedAt": self.started_at,
@@ -119,6 +128,7 @@ pub struct Inner {
     pub pending: HashMap<String, Pending>,
     pub icons: HashMap<u64, String>,
     pub next_waiter: u64,
+    pub shutting_down: bool,
 }
 
 pub struct Hub {
@@ -143,6 +153,7 @@ impl Inner {
             pending: HashMap::new(),
             icons: HashMap::new(),
             next_waiter: 0,
+            shutting_down: false,
         }
     }
 
