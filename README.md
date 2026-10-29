@@ -83,6 +83,8 @@ What an agent does with it:
 | `studio_get_tree`, `studio_get_source` | Read the instance tree or a script's Source in that window |
 | `studio_run_luau` | Run Luau in edit mode in that window, after the plugin re-checks the PlaceId |
 
+Arguments, results and errors for each tool are in [docs/mcp.md](docs/mcp.md).
+
 When two Studio windows have the same place open, the tools refuse until the agent names one with `session_id`. `ROJOHUB_ALLOW_ANY_PROJECT=1` lifts the folder lock for agents that must manage several projects.
 
 ## Auto-connect
